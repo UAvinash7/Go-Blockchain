@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Blockchain</title>
+</head>
+<body>
+    <h1>Blockchain</h1>
+    <ul>
+        {{range .}}
+        <li>Index: {{.Index}}, Timestamp: {{.Timestamp}}, Data: {{.Data}}, Hash: {{.Hash}}, PrevHash: {{.PrevHash}}</li>
+        {{end}}
+    </ul>
+    <form action="/write" method="post">
+        <label for="data">Data:</label><br>
+        <input type="text" id="data" name="data"><br>
+        <input type="submit" value="Submit">
+    </form>
+</body>
+</html>
