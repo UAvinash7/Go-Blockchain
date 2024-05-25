@@ -1,4 +1,3 @@
-
 package main
 
 import (
@@ -6,9 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/gorilla/mux"
 )
 
 // Block represents a block in the blockchain
@@ -66,12 +68,8 @@ func replaceChain(newBlocks []Block) {
 }
 
 func handleGetBlockchain(w http.ResponseWriter, r *http.Request) {
-	bytes, err := json.MarshalIndent(Blockchain, "", "  ")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	fmt.Fprintf(w, "%s\n", string(bytes))
+	tmpl := template.Must(template.ParseFiles("index.html"))
+	tmpl.Execute(w, Blockchain)
 }
 
 func handleWriteBlock(w http.ResponseWriter, r *http.Request) {
@@ -109,8 +107,11 @@ func main() {
 	genesisBlock.Hash = calculateHash(genesisBlock)
 	Blockchain = append(Blockchain, genesisBlock)
 
-	http.HandleFunc("/blockchain", handleGetBlockchain)
-	http.HandleFunc("/write", handleWriteBlock)
+	r := mux.NewRouter()
+	r.HandleFunc("/", handleGetBlockchain).Methods("GET")
+	r.HandleFunc("/write", handleWriteBlock).Methods("POST")
+
+	http.Handle("/", r)
 
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
