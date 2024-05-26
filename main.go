@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"html/template"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -24,6 +26,7 @@ type Block struct {
 
 // Blockchain is a slice of blocks
 var Blockchain []Block
+var mutex = &sync.Mutex{}
 
 func calculateHash(block Block) string {
 	record := string(block.Index) + block.Timestamp + block.Data + block.PrevHash
@@ -68,8 +71,14 @@ func replaceChain(newBlocks []Block) {
 }
 
 func handleGetBlockchain(w http.ResponseWriter, r *http.Request) {
-	tmpl := template.Must(template.ParseFiles("index.html"))
-	tmpl.Execute(w, Blockchain)
+	mutex.Lock()
+	bytes, err := json.MarshalIndent(Blockchain, "", "  ")
+	mutex.Unlock()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	fmt.Fprintf(w, "%s\n", string(bytes))
 }
 
 func handleWriteBlock(w http.ResponseWriter, r *http.Request) {
@@ -82,11 +91,14 @@ func handleWriteBlock(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
+	mutex.Lock()
 	if isBlockValid(m, Blockchain[len(Blockchain)-1]) {
 		newBlockchain := append(Blockchain, m)
 		replaceChain(newBlockchain)
+		saveBlockchain()
 		log.Println("Block added")
 	}
+	mutex.Unlock()
 
 	respondWithJSON(w, r, http.StatusCreated, m)
 }
@@ -102,13 +114,49 @@ func respondWithJSON(w http.ResponseWriter, r *http.Request, code int, payload i
 	w.Write(response)
 }
 
+func saveBlockchain() {
+	mutex.Lock()
+	bytes, err := json.MarshalIndent(Blockchain, "", "  ")
+	if err != nil {
+		log.Println(err.Error())
+		return
+	}
+	err = ioutil.WriteFile("blockchain.json", bytes, 0644)
+	if err != nil {
+		log.Println(err.Error())
+	}
+	mutex.Unlock()
+}
+
+func loadBlockchain() {
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	if _, err := os.Stat("blockchain.json"); os.IsNotExist(err) {
+		genesisBlock := Block{0, time.Now().String(), "Genesis Block", "", ""}
+		genesisBlock.Hash = calculateHash(genesisBlock)
+		Blockchain = append(Blockchain, genesisBlock)
+		saveBlockchain()
+		return
+	}
+
+	bytes, err := ioutil.ReadFile("blockchain.json")
+	if err != nil {
+		log.Println(err.Error())
+		return
+	}
+
+	err = json.Unmarshal(bytes, &Blockchain)
+	if err != nil {
+		log.Println(err.Error())
+	}
+}
+
 func main() {
-	genesisBlock := Block{0, time.Now().String(), "Genesis Block", "", ""}
-	genesisBlock.Hash = calculateHash(genesisBlock)
-	Blockchain = append(Blockchain, genesisBlock)
+	loadBlockchain()
 
 	r := mux.NewRouter()
-	r.HandleFunc("/", handleGetBlockchain).Methods("GET")
+	r.HandleFunc("/blockchain", handleGetBlockchain).Methods("GET")
 	r.HandleFunc("/write", handleWriteBlock).Methods("POST")
 
 	http.Handle("/", r)
