@@ -1,18 +1,19 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // Block represents a block in the blockchain
@@ -27,6 +28,8 @@ type Block struct {
 // Blockchain is a slice of blocks
 var Blockchain []Block
 var mutex = &sync.Mutex{}
+var client *mongo.Client
+var ctx = context.TODO()
 
 func calculateHash(block Block) string {
 	record := string(block.Index) + block.Timestamp + block.Data + block.PrevHash
@@ -72,8 +75,28 @@ func replaceChain(newBlocks []Block) {
 
 func handleGetBlockchain(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
+	defer mutex.Unlock()
+
+	collection := client.Database("blockchain").Collection("blocks")
+	cur, err := collection.Find(ctx, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer cur.Close(ctx)
+
+	var blocks []Block
+	for cur.Next(ctx) {
+		var block Block
+		if err := cur.Decode(&block); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		blocks = append(blocks, block)
+	}
+
+	Blockchain = blocks
 	bytes, err := json.MarshalIndent(Blockchain, "", "  ")
-	mutex.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -95,7 +118,7 @@ func handleWriteBlock(w http.ResponseWriter, r *http.Request) {
 	if isBlockValid(m, Blockchain[len(Blockchain)-1]) {
 		newBlockchain := append(Blockchain, m)
 		replaceChain(newBlockchain)
-		saveBlockchain()
+		saveBlockchain(m)
 		log.Println("Block added")
 	}
 	mutex.Unlock()
@@ -114,46 +137,26 @@ func respondWithJSON(w http.ResponseWriter, r *http.Request, code int, payload i
 	w.Write(response)
 }
 
-func saveBlockchain() {
-	mutex.Lock()
-	bytes, err := json.MarshalIndent(Blockchain, "", "  ")
-	if err != nil {
-		log.Println(err.Error())
-		return
-	}
-	err = ioutil.WriteFile("blockchain.json", bytes, 0644)
+func saveBlockchain(block Block) {
+	collection := client.Database("blockchain").Collection("blocks")
+	_, err := collection.InsertOne(ctx, block)
 	if err != nil {
 		log.Println(err.Error())
 	}
-	mutex.Unlock()
 }
 
-func loadBlockchain() {
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	if _, err := os.Stat("blockchain.json"); os.IsNotExist(err) {
-		genesisBlock := Block{0, time.Now().String(), "Genesis Block", "", ""}
-		genesisBlock.Hash = calculateHash(genesisBlock)
-		Blockchain = append(Blockchain, genesisBlock)
-		saveBlockchain()
-		return
-	}
-
-	bytes, err := ioutil.ReadFile("blockchain.json")
+func initMongoDB() {
+	clientOptions := options.Client().ApplyURI("mongodb://localhost:27017")
+	client, _ = mongo.Connect(ctx, clientOptions)
+	err := client.Ping(ctx, nil)
 	if err != nil {
-		log.Println(err.Error())
-		return
+		log.Fatal(err)
 	}
-
-	err = json.Unmarshal(bytes, &Blockchain)
-	if err != nil {
-		log.Println(err.Error())
-	}
+	log.Println("Connected to MongoDB!")
 }
 
 func main() {
-	loadBlockchain()
+	initMongoDB()
 
 	r := mux.NewRouter()
 	r.HandleFunc("/blockchain", handleGetBlockchain).Methods("GET")
